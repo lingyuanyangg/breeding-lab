@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<script src="mqtt.min.js"></script>
+<script src="sync.js"></script>
+</head>
+<body>
+<title>Breeding Lab Cue Score (EN)</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one narrow column, sticky HUD-style clock bar on top, overview strip, then the cue list in time order. Dark first for the stage. */
+:root {
+  --bg: #0b0e12; --panel: #131920; --panel-2: #1a222b; --line: #29333e;
+  --fg: #e6edf3; --muted: #8b96a3; --hud: #cfe3ff; --alarm: #ff5a68;
+  --p1: #E5243B; --p2: #F2711C; --p3: #D9A400; --p4: #21A453; --p5: #0FA3A3; --p6: #1F5BFF;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #E9ECEF; --panel: #F6F8FF; --panel-2: #fdfdff; --line: #c9cfd5;
+  --fg: #2B2F33; --muted: #646d76; --hud: #1F5BFF; --alarm: #d21f35; color-scheme: light } }
+:root[data-theme="light"] {
+  --bg: #E9ECEF; --panel: #F6F8FF; --panel-2: #fdfdff; --line: #c9cfd5;
+  --fg: #2B2F33; --muted: #646d76; --hud: #1F5BFF; --alarm: #d21f35; color-scheme: light }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.6; -webkit-text-size-adjust: 100% }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg) }
+.wrap { max-width: 560px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 48px }
+.mono { font-family: var(--mono) }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--hud); outline-offset: 2px }
+
+/* sticky bar */
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--bg); margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); padding: 10px max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--line); display: grid; gap: 8px }
+.row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap }
+.clock { font-family: var(--mono); font-size: 30px; font-weight: 500; letter-spacing: .02em; font-variant-numeric: tabular-nums; min-width: 4.2ch; line-height: 1 }
+.clock.neg { color: var(--muted) }
+.ctl { font-family: var(--mono); font-size: 13px; height: 34px; min-width: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel) }
+.ctl.go { border-color: var(--hud); color: var(--hud); font-weight: 600 }
+.spacer { flex: 1 }
+.ctl.sync { font-size: 11.5px; letter-spacing: .04em }
+.techs { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px }
+.tech { height: 34px; border: 1px solid var(--line); border-radius: 3px; font-family: var(--mono); font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 3px; background: var(--panel) }
+.tech .sym { color: var(--c) }
+.tech[aria-pressed="true"] { background: var(--c, var(--fg)); color: #fff; border-color: var(--c, var(--fg)) }
+.tech[aria-pressed="true"] .sym { color: #fff }
+.tech.all[aria-pressed="true"] { background: var(--fg); color: var(--bg) }
+.marks { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px }
+.mk { height: 32px; background: var(--fg); color: var(--bg); font-family: var(--mono); font-weight: 600; font-size: 15px; border-radius: 2px; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1 }
+.mk small { font-size: 8.5px; font-weight: 400; opacity: .7; margin-top: 2px }
+
+/* now panel with HUD corner brackets */
+.now { margin-top: 14px; padding: 14px 14px 12px; position: relative; background: var(--panel);
+  --b: var(--muted);
+  background-image: linear-gradient(var(--b),var(--b)), linear-gradient(var(--b),var(--b)), linear-gradient(var(--b),var(--b)), linear-gradient(var(--b),var(--b)),
+                    linear-gradient(var(--b),var(--b)), linear-gradient(var(--b),var(--b)), linear-gradient(var(--b),var(--b)), linear-gradient(var(--b),var(--b));
+  background-repeat: no-repeat;
+  background-size: 12px 1px, 1px 12px, 12px 1px, 1px 12px, 12px 1px, 1px 12px, 12px 1px, 1px 12px;
+  background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100% }
+.now.red { --b: var(--alarm) }
+.eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted) }
+.now-verb { font-family: var(--mono); font-size: 26px; font-weight: 600; line-height: 1.15; margin: 4px 0 2px; text-wrap: balance; overflow-wrap: anywhere }
+.now-verb.dim { color: var(--muted) }
+.now-sub { font-size: 14px; color: var(--fg) }
+.now-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); font-family: var(--mono); font-size: 12px; color: var(--muted); flex-wrap: wrap }
+.now-meta b { color: var(--fg); font-weight: 500 }
+.cd { font-family: var(--mono); font-size: 44px; font-weight: 600; line-height: 1; color: var(--hud); float: right; margin-left: 8px; font-variant-numeric: tabular-nums }
+.light { display: inline-flex; align-items: center; gap: 6px }
+.light i { width: 8px; height: 8px; border-radius: 50%; background: var(--fg); display: inline-block }
+.light.red i { background: var(--alarm) }
+.light.off i { background: transparent; border: 1px solid var(--muted) }
+.light.flk i { background: var(--alarm); animation: flk .25s steps(2) infinite }
+@keyframes flk { 50% { opacity: 0 } }
+@media (prefers-reduced-motion: reduce) { .light.flk i { animation: none } }
+.note-local { font-size: 12px; color: var(--muted); margin-top: 6px }
+
+/* overview strip */
+.ov { margin-top: 18px }
+.ov-grid { position: relative; margin-top: 6px; display: grid; gap: 2px; touch-action: manipulation; cursor: pointer }
+.ov-row { position: relative; height: 13px; background: var(--panel) }
+.ov-row span { position: absolute; top: 2px; bottom: 2px; background: var(--muted); opacity: .45 }
+.ov-row span.me { background: var(--c); opacity: 1 }
+.ov-row span.sys { background: var(--fg); opacity: .8 }
+.ov-row span.red { background: var(--alarm); opacity: .8 }
+.ov-row span.off { background: transparent; border: 1px solid var(--muted); opacity: 1 }
+.ov-in { position: relative; margin-left: 34px; display: grid; gap: 2px }
+.ov-row span.ov-lbl { background: none; opacity: 1; bottom: auto; width: 32px; position: absolute; left: -34px; top: -1px; font-family: var(--mono); font-size: 9px; color: var(--muted); z-index: 1; pointer-events: none; line-height: 15px }
+.ov-head { position: relative; height: 16px }
+.ov-head b { position: absolute; z-index: 3; transform: translateX(-50%); font-family: var(--mono); font-size: 10px; font-weight: 600; background: var(--fg); color: var(--bg); width: 14px; text-align: center; line-height: 14px }
+.ov-axis { position: relative; height: 14px; font-family: var(--mono); font-size: 9px; color: var(--muted) }
+.ov-axis span { position: absolute; transform: translateX(-50%) }
+.ph { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--hud); pointer-events: none; z-index: 2 }
+
+/* list */
+.sec { margin-top: 26px; display: flex; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 4px }
+.sec h2 { font-family: var(--mono); font-size: 13px; letter-spacing: .14em; margin: 0; font-weight: 600 }
+.sec span { font-family: var(--mono); font-size: 12px; color: var(--muted) }
+.between { font-size: 13px; color: var(--muted); padding: 8px 0 0 12px; border-left: 1px dashed var(--line); margin: 8px 0 0 4px }
+.between b { font-family: var(--mono); font-weight: 500; color: var(--fg); font-size: 12px; letter-spacing: .04em }
+.rm { display: flex; align-items: center; gap: 10px; margin-top: 14px; scroll-margin-top: 200px }
+.rm b { background: var(--fg); color: var(--bg); font-family: var(--mono); font-size: 18px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 2px }
+.rm span { font-family: var(--mono); font-size: 13px }
+.rm em { font-style: normal; font-size: 13px; color: var(--muted) }
+
+.cue { margin-top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 10px 12px; scroll-margin-top: 200px; display: grid; grid-template-columns: 4.6em 1fr; gap: 0 12px }
+.cue > * { min-width: 0 }
+.cue .t { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 500; line-height: 1.3 }
+.cue .t small { display: block; font-size: 11px; color: var(--muted); font-weight: 400 }
+.cue .id { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: .06em }
+.cue .verb { font-family: var(--mono); font-size: 18px; font-weight: 600; line-height: 1.25; margin: 1px 0 4px; overflow-wrap: anywhere }
+.cue .who { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px }
+.cue p { margin: 0; font-size: 14.5px }
+.cue .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px }
+.tag { font-family: var(--mono); font-size: 10.5px; letter-spacing: .05em; padding: 1px 6px; border: 1px solid var(--line); border-radius: 2px; color: var(--muted) }
+.tag.red { color: var(--alarm); border-color: var(--alarm) }
+.cue details { margin-top: 6px; font-size: 12.5px; color: var(--muted) }
+.cue summary { cursor: pointer; font-family: var(--mono); font-size: 11px; letter-spacing: .06em }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 12px; padding: 1px 7px 1px 5px; border: 1.5px solid var(--c, var(--fg)); border-radius: 99px; line-height: 1.4 }
+.badge .sym { color: var(--c) }
+.badge.all { border-color: var(--fg) }
+.split { display: grid; gap: 4px; margin: 2px 0 6px }
+.split div { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap }
+.split .verb { font-size: 15px; margin: 0 }
+.cue.me { border-color: var(--c, var(--fg)); box-shadow: inset 3px 0 0 var(--c, var(--fg)) }
+.cue.other { opacity: .5 }
+.cue.other p, .cue.other details { display: none }
+.cue.live { border-color: var(--hud); box-shadow: 0 0 0 1px var(--hud) }
+.cue.other.live { opacity: 1 }
+.cue.free { border-style: dashed }
+
+.legend { margin-top: 32px; font-size: 13.5px; color: var(--muted) }
+.legend h3 { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; color: var(--fg); margin: 0 0 6px; font-weight: 600 }
+.legend ul { margin: 0; padding-left: 1.1em; display: grid; gap: 4px }
+.legend li b { color: var(--fg); font-weight: 500 }
+.foot { margin-top: 20px; font-family: var(--mono); font-size: 11px; color: var(--muted) }
+.follow { font-family: var(--mono); font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px }
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <div class="row">
+      <div class="clock" id="clock">0:00</div>
+      <button class="ctl go" id="play" type="button">▶ Start</button>
+      <button class="ctl" id="back" type="button" aria-label="Back 5 seconds">−5</button>
+      <button class="ctl" id="fwd" type="button" aria-label="Forward 5 seconds">+5</button>
+      <button class="ctl sync" id="sync" type="button" hidden></button><span class="spacer"></span>
+      <label class="follow"><input type="checkbox" id="follow" checked> Follow</label>
+    </div>
+    <div class="techs" id="techs" role="group" aria-label="Choose your number"></div>
+    <div class="marks" id="marks" role="group" aria-label="Rehearsal marks"></div>
+  </div>
+
+  <section class="now" id="now" aria-live="polite"></section>
+  <div class="note-local" id="note">This clock runs on this phone only, for practice and finding your place. In the show, the big-screen HUD is the reference. Tapping a rehearsal mark stops 5 s before it, like the number keys in UE.</div>
+
+  <section class="ov" aria-label="Overview of the piece">
+    <div class="eyebrow">Overview · 0:00–10:00 · tap to jump</div>
+    <div class="ov-grid"><div class="ov-in" id="ov"></div></div>
+  </section>
+
+  <div id="list"></div>
+
+  <section class="legend">
+    <h3>How to read</h3>
+    <ul>
+      <li><b>Numbers and symbols</b>: T01 ○ red, T02 △ orange, T03 □ yellow, T04 ◇ green, T05 ✕ teal, T06 ＋ blue, matching the HUD badges. ALL 6 means everyone.</li>
+      <li><b>Pick your number</b> and your cues get a coloured edge, while other players' cues fade and hide their text. Your row lights up in the overview.</li>
+      <li><b>NEXT preview</b>: 5 s before every event (except observation), the HUD shows NEXT, an empty-ring badge and a 5→1 countdown. The event starts on time, not early.</li>
+      <li><b>Back to back</b>: at 5:00, 5:20, 7:30 and 8:00 the next cue starts the moment the previous one ends. The HUD shows only a small NEXT line along the bottom edge, so watch for it.</li>
+      <li><b>Judging</b>: each cue is rated success, partial, fail or rebel, which shapes stability and the final organism. Open “Judging” to see what the system listens for. For noisy sounds, pitch cues use brightness (centroid) instead.</li>
+      <li><b>Light</b>: the chamber turns red at 5:35 and stays red; 8:00–8:15 power cut with Ableton muted; 8:15–9:20 hard flicker; 9:20 back to cold white.</li>
+    </ul>
+    <div class="foot">Built from ue/cues_v2.json, the 6-player event table and the score notes · rehearsal marks A–I (2026-10-10)</div>
+  </section>
+</div>
+
+<script>
+(() => {
+const COL = ["", "var(--p1)", "var(--p2)", "var(--p3)", "var(--p4)", "var(--p5)", "var(--p6)"];
+const SYM = ["", "○", "△", "□", "◇", "✕", "＋"];
+const GLIDE = "Glide pitch up ≥ 5 semitones within 5 s and stay up there.";
+const GJ = "Pitch rises ≥ 5 semitones within 5 s.";
+// [id, start, end, verb, players, instruction, judging, extra]
+const CUES = [
+  ["B2", 0, 60, "ENTER · UNISON", "ALL", "Once the lights come up, enter one by one every 5 s in number order: T01 0:00, T02 0:05, T03 0:10, T04 0:15, T05 0:20, T06 0:25, sounding inside your own 5 s window. Once all are in, converge on the group's middle pitch; from 0:45 hold the unison until 1:00.", "Enter in order inside your own 5 s window; then all 6 pitches within ±1 semitone of the group median for 2 s = success; entered but not together = partial.", {entries: [0, 5, 10, 15, 20, 25]}],
+  ["E01", 60, 65, "GLIDE UP", "1", GLIDE, GJ],
+  ["E02", 70, 75, "GLIDE UP", "2", GLIDE, GJ],
+  ["E03", 80, 85, "GLIDE UP", "3", GLIDE, GJ],
+  ["E04", 90, 95, "GLIDE UP", "4", GLIDE, GJ],
+  ["E05", 100, 105, "GLIDE UP", "5", GLIDE, GJ],
+  ["E06", 110, 115, "GLIDE UP", "6", GLIDE, GJ],
+  ["E07", 120, 150, "GLIDE DOWN", "ALL", "Everyone glides slowly down ≥ 7 semitones over 30 s, each landing at a different height (fanned out). No need to align.", "Each pitch falls ≥ 7 semitones; spread-out landings are shown only, not scored."],
+  ["E08", 195, 205, "NOISIER", "1", "Make the sound dirtier (noise / distortion / modulation), clearly rougher, and hold 1 s.", "Flatness rises ≥ 6 dB within 10 s, held 1 s."],
+  ["E09", 210, 217, "POINTS", "3+6", "Short point-like sounds, ≥ 2 per second, with real gaps between them; hold 2 s.", "Onset rate ≥ 2/s and level drops ≥ 12 dB between onsets, held 2 s."],
+  ["E10", 225, 230, "LOWER", "2+5", "Bring pitch (or brightness) down into the lowest 20% of your range; hold 1 s.", "Pitch (or centroid) in the lowest 20% of your range, held 1 s."],
+  ["E11", 240, 248, "NOISY GRAIN", "4", "Dirty and broken: noisy, chopped into ≥ 3 grains per second; hold 2 s.", "Flatness +6 dB and onset rate ≥ 3/s, held 2 s."],
+  ["E12", 270, 280, "PURE SINE / NOISY LOW", "3+2", "Split command: two players do different things at the same time.", "T03 flatness into the personal lowest 10%, held 2 s; T02 flatness +6 dB while pitch stays ≤ baseline +3 semitones, held 2 s. Both = success, one = partial.", {split: [[3, "PURE SINE", "Within 10 s reduce to a near-sine pure tone; hold 2 s."], [2, "NOISY LOW", "Get noisy but keep the pitch low (no higher than +3 semitones from where you were); hold 2 s."]]}],
+  ["E13", 290, 300, "SHIFT PITCH", "5", "Jump the pitch ≥ 7 semitones from where it was (up or down). A jump, not a glide; hold 1 s.", "Pitch jumps ≥ 7 semitones from baseline, held 1 s."],
+  ["E14", 300, 305, "HIGH DRONE", "5", "Rise into the top 20% of your range and stay steady (wobble < 1 semitone) for 2 s. Follows E13 directly.", "Pitch in the top 20% of range with < 1 semitone wobble, held 2 s.", {b2b: true}],
+  ["E15", 310, 320, "SWEEP FILTER", "1+2+3", "Sweep the filter back and forth: brightness swings ≥ 6 semitones within 3 s, for 5 s.", "Centroid swing ≥ 6 semitones in a rolling 3 s window, sustained 5 s."],
+  ["E16", 320, 325, "HOLD DARK", "1+2+3", "Close the filter into your darkest 25% and hold steady 3 s. Follows E15 directly, no separate countdown.", "Centroid in the darkest 25% and stable, held 3 s.", {b2b: true}],
+  ["E17", 330, 335, "PITCH DROP", "5", "Drop pitch ≥ 5 semitones within 5 s.", "Pitch falls ≥ 5 semitones within 5 s."],
+  ["O2", 335, 350, "HOLD", "ALL", "ANOMALY DETECTED, the chamber light turns red. Hold your current sound unchanged.", "Observation, not scored.", {nojudge: true}],
+  ["E18", 350, 360, "NOISE WALL", "ALL", "Tutti continuous noise wall: dirty and unbroken (< 1 onset per second), never silent; hold 3 s.", "Flatness +6 dB, not silent, onset rate < 1/s, held 3 s."],
+  ["E19", 370, 380, "LOW", "ALL", "Everyone down into the lowest 20% of their range; hold 2 s.", "Pitch (or centroid) in the lowest 20%, held 2 s."],
+  ["E20", 390, 400, "POINTS", "ALL", "Everyone point-like, ≥ 2 per second with gaps between; hold 2 s.", "Onset rate ≥ 2/s and ≥ 12 dB drop between onsets, held 2 s."],
+  ["E21", 410, 420, "PURE DRONE", "ALL", "Everyone reduces to a clean, steady drone; hold 3 s.", "Flatness near minimum and stable, held 3 s."],
+  ["E22", 440, 450, "BEND PITCH", "ALL", "Bend pitch back and forth with hard corners: swings ≥ 5 semitones within 3 s, for 5 s.", "Pitch swing ≥ 5 semitones in a rolling 3 s window, sustained 5 s."],
+  ["E23", 450, 460, "HIGH", "ALL", "Everyone up into the top 20% of their range; hold 2 s. Follows E22 directly.", "Pitch (or centroid) in the top 20%, held 2 s.", {b2b: true}],
+  ["E24", 465, 480, "THINNING", "ALL", "Points getting sparser and sparser, ending at ≤ 1 per second, but do not stop.", "Points with onset rate falling to ≤ 1/s, never silent."],
+  ["E25", 480, 495, "BLACKOUT", "ALL", "Power cut: the system plays a shutdown sound and mutes Ableton. Go fully silent as fast as you can. The last one to fall silent is marked EXPOSED at 8:15.", "All silent; the last to go silent = EXPOSED.", {b2b: true}],
+  ["F1", 495, 560, "CONTAINMENT BREACH", "ALL", "Chamber light and every HUD hard-flicker and the text turns to glitch. Ableton is muted on every black frame, so the sound cuts in and out with the flicker. Free improvisation for all; watch for the light coming back at 9:20.", "Not scored.", {nojudge: true, free: true}],
+  ["L1", 560, 570, "EVACUATE", "ALL", "HUD: ALL LAB TECHNICIANS PLEASE LEAVE WITHIN 10 S. Fade smoothly down to the noise floor within 10 s. A fade, not a cut.", "The share of players who fade smoothly = lock ratio, which decides the ending."],
+].map(([id, s, e, verb, pl, txt, judge, x = {}]) => ({ id, s, e, verb, all: pl === "ALL", ps: pl === "ALL" ? [1,2,3,4,5,6] : pl.split("+").map(Number), txt, judge, ...x }));
+
+const ACTS = [["BOOT", 0, 60], ["INCUBATION", 60, 150], ["OBSERVING", 150, 170], ["DIFFERENTIATION", 170, 335], ["ANOMALY DETECTED", 335, 350], ["CRISIS", 350, 495], ["BREACH", 495, 570], ["ARCHIVE", 570, 600]];
+const MARKS = [["A", 0, "Lights up · staggered entry"], ["B", 60, "Solo glides up"], ["C", 120, "Tutti glide down"], ["D", 170, "Act 2"], ["E", 240, "E11 NOISY GRAIN"], ["F", 335, "Observation → crisis"], ["G", 440, "E22 BEND PITCH"], ["H", 480, "Blackout"], ["I", 560, "Gene lock / evacuate"]];
+// what you do when no cue is on you
+const BETWEEN = [
+  [0, 60, "ENTER", "Enter in your slot, then hold the unison."],
+  [60, 120, "SUSTAIN", "When not called, keep the unison sound going with only small changes."],
+  [150, 170, "OBSERVING", "Observation, not scored: stay where your glide landed and hold."],
+  [170, 335, "SLOW DRIFT ALLOWED", "Keep sounding; you may drift very slowly."],
+  [350, 495, "CRISIS", "Keep sounding with the timbre the last event left you, and wait for the next tutti command."],
+  [570, 600, "ARCHIVE", "Ending and archive card. Sound ends."],
+];
+const fmt = (t) => { const n = t < 0; t = n ? Math.ceil(-t) : Math.floor(t); return (n ? "−" : "") + Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
+const lightAt = (t) => t < 0 ? ["off", "Standby · fully dark"] : t < 335 ? ["", "Cold white"] : t < 480 ? ["red", "Red"] : t < 495 ? ["off", "OUT OF POWER"] : t < 560 ? ["flk", "Red hard flicker"] : t < 570 ? ["", "Cold white again"] : ["", "ARCHIVE"];
+const betweenAt = (t) => BETWEEN.find(([a, b]) => t >= a && t < b);
+
+let me = 0, t = -5, running = false, follow = true, lastLiveId = null;
+try { me = +localStorage.getItem("cs_me") || 0; follow = localStorage.getItem("cs_follow") !== "0"; } catch (e) {}
+const $ = (id) => document.getElementById(id);
+$("follow").checked = follow;
+
+const badge = (p) => p === 0 ? `<span class="badge all">ALL 6</span>` : `<span class="badge" style="--c:${COL[p]}"><span class="sym">${SYM[p]}</span>T0${p}</span>`;
+const involves = (c, p) => p === 0 || c.ps.includes(p);
+const verbFor = (c, p) => c.split && p ? (c.split.find((s) => s[0] === p) || [0, c.verb])[1] : c.verb;
+
+// tech chips
+$("techs").innerHTML = `<button type="button" class="tech all" data-p="0">ALL</button>` + [1,2,3,4,5,6].map((p) => `<button type="button" class="tech" data-p="${p}" style="--c:${COL[p]}"><span class="sym">${SYM[p]}</span>T0${p}</button>`).join("");
+$("techs").addEventListener("click", (e) => { const b = e.target.closest(".tech"); if (!b) return; me = +b.dataset.p; try { localStorage.setItem("cs_me", me); } catch (er) {} renderAll(); });
+$("marks").innerHTML = MARKS.map(([L, s]) => `<button type="button" class="mk" data-s="${s}" aria-label="Mark ${L} ${fmt(s)}">${L}<small>${fmt(s)}</small></button>`).join("");
+$("marks").addEventListener("click", (e) => { const b = e.target.closest(".mk"); if (!b) return; act("seek", Math.max(-5, +b.dataset.s - 5)); const el = $("mk-" + b.textContent[0]); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); });
+
+// list
+function renderList() {
+  let h = "", ci = 0, mi = 0, bi = 0;
+  for (const [name, a, b] of ACTS) {
+    h += `<div class="sec"><h2>${name}</h2><span>${fmt(a)}–${fmt(b)}</span></div>`;
+    const items = [];
+    MARKS.forEach((m) => { if (m[1] >= a && m[1] < b) items.push([m[1], 0, `<div class="rm" id="mk-${m[0]}"><b>${m[0]}</b><span>${fmt(m[1])}</span><em>${m[2]}</em></div>`]); });
+    BETWEEN.forEach((x) => { if (x[0] >= a && x[0] < b) items.push([x[0], 1, `<div class="between"><b>${x[2]}</b> · ${x[3]}</div>`]); });
+    CUES.forEach((c) => { if (c.s >= a && c.s < b) items.push([c.s, 2, cueHTML(c)]); });
+    items.sort((x, y) => x[0] - y[0] || x[1] - y[1]).forEach((x) => (h += x[2]));
+  }
+  $("list").innerHTML = h;
+}
+function cueHTML(c) {
+  const mine = me && c.ps.includes(me), cls = me ? (mine ? "me" : "other") : "";
+  const who = c.all ? badge(0) : c.ps.map(badge).join("");
+  const [lc, ln] = lightAt(c.s);
+  let body;
+  if (c.split) {
+    body = `<p>${c.txt}</p><div class="split">` + c.split.map(([p, v, tx]) => `<div>${badge(p)}<span class="verb">${v}</span></div><p>${tx}</p>`).join("") + `</div>`;
+  } else body = `<p>${c.txt}</p>`;
+  const tags = [`<span class="tag">${c.e - c.s} s</span>`];
+  if (c.b2b) tags.push(`<span class="tag">BACK TO BACK</span>`);
+  if (c.nojudge) tags.push(`<span class="tag">NOT SCORED</span>`);
+  if (lc) tags.push(`<span class="tag red">LIGHT · ${ln}</span>`);
+  const entries = c.entries && me ? `<p><b>Your entry: ${fmt(c.entries[me - 1])}</b></p>` : "";
+  return `<article class="cue ${cls} ${c.free ? "free" : ""}" id="c-${c.id}" style="${mine ? `--c:${COL[me]}` : ""}">
+    <div class="t">${fmt(c.s)}<small>→ ${fmt(c.e)}</small></div>
+    <div><div class="id">${c.id}</div><div class="verb">${mine ? verbFor(c, me) : c.verb}</div><div class="who">${who}</div>${entries}${body}
+    <div class="tags">${tags.join("")}</div>
+    <details><summary>Judging</summary>${c.judge}</details></div></article>`;
+}
+
+// overview
+function renderOv() {
+  const pc = (s) => (s / 600 * 100).toFixed(3) + "%";
+  let h = `<div class="ov-head">` + MARKS.map(([L, s]) => `<b style="left:calc(${pc(s)} + ${s === 0 ? 7 : 0}px)">${L}</b>`).join("") + `</div>`;
+  h += `<div class="ov-row"><span class="ov-lbl">LIGHT</span>` +
+    [[0, 335, "sys"], [335, 480, "red"], [480, 495, "off"], [495, 560, "red"], [560, 570, "sys"]].map(([a, b, k]) => `<span class="${k}" style="left:${pc(a)};width:${pc(b - a)}"></span>`).join("") + `</div>`;
+  for (let p = 1; p <= 6; p++) {
+    h += `<div class="ov-row" style="--c:${COL[p]}"><span class="ov-lbl">T0${p}</span>` + CUES.filter((c) => c.ps.includes(p)).map((c) =>
+      `<span class="${me === p || (me === 0 && !c.all) ? "me" : ""}" style="left:${pc(c.id === "B2" ? c.entries[p - 1] : c.s)};width:${pc((c.id === "B2" ? 60 - c.entries[p - 1] : c.e - c.s))}${me === 0 && !c.all ? ";--c:" + COL[p] : ""}"></span>`).join("") + `</div>`;
+  }
+  h += `<div class="ov-axis">` + [0, 120, 240, 360, 480, 600].map((s) => `<span style="left:${pc(s)};${s === 0 ? "transform:none" : s === 600 ? "transform:translateX(-100%)" : ""}">${s / 60}:00</span>`).join("") + `</div>`;
+  h += `<div class="ph" id="ph"></div>`;
+  $("ov").innerHTML = h;
+}
+$("ov").addEventListener("click", (e) => { const r = $("ov").getBoundingClientRect(); act("seek", Math.max(-5, Math.round((e.clientX - r.left) / r.width * 600))); });
+
+// now panel
+function renderNow() {
+  const live = CUES.filter((c) => t >= c.s && t < c.e && involves(c, me));
+  const next = CUES.find((c) => c.s > t && involves(c, me));
+  const [lc, ln] = lightAt(t);
+  let h = "";
+  if (t < 0) {
+    h = `<div class="cd">${Math.ceil(-t)}</div><div class="eyebrow">Count-in · 5 s after Space</div><div class="now-verb dim">STANDBY</div><div class="now-sub">The count-in ends at 0:00, the chamber light comes up within 3 s and T01 enters straight away.</div>`;
+  } else if (live.length) {
+    const c = live[0], mine = me && c.ps.includes(me);
+    const left = Math.ceil(c.e - t);
+    h = `<div class="cd">${left}</div><div class="eyebrow">${c.id} · NOW</div><div class="now-verb">${verbFor(c, me)}</div><div class="who" style="display:flex;gap:4px;flex-wrap:wrap;margin:4px 0 6px">${c.all ? badge(0) : c.ps.map(badge).join("")}</div>`;
+    if (c.id === "B2" && me) { const en = c.entries[me - 1]; h += `<div class="now-sub">${t < en ? `You enter at ${fmt(en)}, in ${Math.ceil(en - t)} s.` : t < 45 ? "You're in. Converge on the group's middle pitch." : "Unison. Hold until 1:00."}</div>`; }
+    else if (c.split && me) { const s = c.split.find((x) => x[0] === me); h += `<div class="now-sub">${s ? s[2] : c.txt}</div>`; }
+    else h += `<div class="now-sub">${c.txt}</div>`;
+  } else {
+    const bw = betweenAt(t);
+    const otherLive = CUES.find((c) => t >= c.s && t < c.e);
+    h = `<div class="eyebrow">${me ? `T0${me} · no cue for you now` : "No cue now"}</div><div class="now-verb dim">${bw ? bw[2] : otherLive ? "HOLD" : "—"}</div><div class="now-sub">${otherLive ? `${otherLive.id} ${otherLive.verb} is on (${otherLive.ps.map((p) => "T0" + p).join("+")}). ` : ""}${bw ? bw[3] : ""}</div>`;
+  }
+  if (next) {
+    const dn = Math.ceil(next.s - t);
+    const pre = dn <= 5 && !next.nojudge;
+    h += `<div class="now-meta"><span>NEXT <b>${verbFor(next, me)}</b> · ${next.all ? "ALL 6" : next.ps.map((p) => "T0" + p).join("+")}</span><span>${pre ? `<b style="color:var(--hud)">${dn}</b>` : `<b>${fmt(next.s)}</b> · in ${dn} s`}</span></div>`;
+  } else h += `<div class="now-meta"><span>No more cues${me ? " for you" : ""}</span></div>`;
+  h += `<div class="now-meta"><span class="light ${lc}"><i></i>Light · ${ln}</span><span>${(ACTS.find(([, a, b]) => t >= a && t < b) || ["STANDBY"])[0]}</span></div>`;
+  $("now").innerHTML = h;
+  $("now").className = "now" + (lc === "red" || lc === "flk" ? " red" : "");
+  $("clock").textContent = fmt(t);
+  $("clock").classList.toggle("neg", t < 0);
+  const ph = $("ph"); if (ph) { ph.style.left = (Math.max(0, Math.min(600, t)) / 600 * 100) + "%"; }
+  // highlight live cue in list
+  const any = CUES.find((c) => t >= c.s && t < c.e && involves(c, me)) || CUES.find((c) => t >= c.s && t < c.e);
+  const id = any ? any.id : null;
+  if (id !== lastLiveId) {
+    document.querySelectorAll(".cue.live").forEach((el) => el.classList.remove("live"));
+    if (id) { const el = $("c-" + id); if (el) { el.classList.add("live"); if (follow && running) el.scrollIntoView({ behavior: "smooth", block: "start" }); } }
+    lastLiveId = id;
+  }
+}
+
+function renderAll() {
+  document.querySelectorAll(".tech").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.p === me)));
+  renderList(); renderOv(); lastLiveId = null; renderNow();
+}
+
+let wake = null, db = null, canWrite = false, remote = null, mode = "local", wq = Promise.resolve();
+let local = { running: false, t: -5, at: Date.now() };
+const nowT = (c) => Math.max(-5, Math.min(600, c.running ? c.t + (Date.now() - c.at) / 1000 : c.t));
+const active = () => (mode === "sync" && remote ? remote : local);
+// every change is absolute state {running, t, at}, so late joiners and slow deliveries still land on the right time
+function act(kind, v) {
+  if (mode === "sync" && !canWrite) return;
+  const c = active(), cur = nowT(c), at = Date.now();
+  let n;
+  if (kind === "toggle") n = cur >= 600 ? { running: true, t: -5, at } : { running: !c.running, t: cur, at };
+  else if (kind === "nudge") n = { running: c.running && cur < 600, t: Math.max(-5, Math.min(600, cur + v)), at };
+  else n = { running: false, t: v, at }; // jumps stop there, like UE's number keys
+  if (mode === "sync") {
+    remote = n;
+    const ref = db.doc("live/clock");
+    wq = wq.then(() => ref.set(n)).catch(() => { canWrite = false; setMode("sync"); });
+  } else local = n;
+  lastLiveId = null; prevSec = null;
+}
+function setMode(m) {
+  mode = m;
+  const sync = $("sync"), follower = m === "sync" && !canWrite;
+  sync.hidden = !db;
+  sync.textContent = m !== "sync" ? "LOCAL" : !remote && !canWrite ? "○ WAITING" : canWrite ? "● SYNCED · YOU CONTROL" : "● SYNCED";
+  sync.classList.toggle("go", m === "sync");
+  ["play", "back", "fwd"].forEach((id) => ($(id).hidden = follower));
+  $("note").textContent = !db ? "This clock runs on this phone only, for practice and finding your place. In the show, the big-screen HUD is the reference. Tapping a rehearsal mark stops 5 s before it, like the number keys in UE." : m !== "sync" ? "Local practice: this clock runs on this phone only. Tap LOCAL to go back to the synced timeline." : !remote && !canWrite ? "Connected. Waiting for the conductor to press Start." : canWrite ? "You are in control: Start, Pause, ±5, rehearsal marks and taps on the overview are sent to everyone with this page open. Tap SYNCED · YOU CONTROL to switch to local practice." : "The conductor starts, pauses and jumps the timeline for everyone; every open copy of this page shows the same time. Tap SYNCED to switch to a local practice clock on this phone.";
+  lastLiveId = null; prevSec = null;
+}
+$("sync").onclick = () => {
+  if (mode === "sync") { const c = active(); local = { running: c.running, t: nowT(c), at: Date.now() }; setMode("local"); }
+  else setMode("sync");
+};
+(async () => {
+  if (!window.claude || !window.claude.use) return;
+  try {
+    const [d, u] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
+    if (!d) return;
+    db = d;
+    canWrite = u ? !!(await u.canEdit()) : false;
+    db.doc("live/clock").onSnapshot((s) => {
+      const x = s.exists ? s.data() : null;
+      remote = x && typeof x.t === "number" && typeof x.at === "number" ? { running: !!x.running, t: x.t, at: x.at } : null;
+      setMode(mode);
+    }, () => { db = null; setMode("local"); });
+    setMode("sync");
+  } catch (e) { db = null; }
+})();
+async function wakeSet(on) {
+  try { if (on && navigator.wakeLock) wake = await navigator.wakeLock.request("screen"); else if (!on && wake) { await wake.release(); wake = null; } } catch (e) {}
+}
+$("play").onclick = () => act("toggle");
+$("back").onclick = () => act("nudge", -5);
+$("fwd").onclick = () => act("nudge", 5);
+$("follow").onchange = (e) => { follow = e.target.checked; try { localStorage.setItem("cs_follow", follow ? "1" : "0"); } catch (er) {} };
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("input,summary")) return;
+  if (e.code === "Space") { e.preventDefault(); act("toggle"); }
+  const k = "123456789".indexOf(e.key); if (k >= 0) act("seek", Math.max(-5, MARKS[k][1] - 5));
+});
+document.addEventListener("visibilitychange", () => { if (running && document.visibilityState === "visible") wakeSet(true); });
+
+let prevSec = null;
+function tick() {
+  const c = active(); t = nowT(c);
+  const r = c.running && t < 600;
+  if (r !== running) { running = r; $("play").textContent = r ? "❚❚ Pause" : "▶ Start"; wakeSet(r); }
+  const s = Math.floor(t * 4);
+  if (s !== prevSec) { prevSec = s; renderNow(); }
+  requestAnimationFrame(tick);
+}
+renderAll();
+requestAnimationFrame(tick);
+})();
+</script>
+
+</body>
+</html>
