@@ -2,7 +2,7 @@
 
 Mobile cue score for the 6 Lab Technicians of BREEDING LAB (10-minute version, rehearsal marks A–I).
 
-https://lingyuanyangg.github.io/breeding-lab-score/
+https://lingyuanyangg.github.io/breeding-lab/
 
 ## Shared clock
 
